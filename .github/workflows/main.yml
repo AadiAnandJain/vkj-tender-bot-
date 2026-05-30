@@ -1,0 +1,29 @@
+name: VKJ Tender Discovery Bot
+
+on:
+  schedule:
+    # 7:00 AM IST = 01:30 UTC
+    - cron: '30 1 * * *'
+    # 7:00 PM IST = 13:30 UTC
+    - cron: '30 13 * * *'
+  workflow_dispatch:  # Manual trigger button on GitHub
+
+jobs:
+  discover-tenders:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Run VKJ Tender Bot
+        run: python scraper.py
+
+      - name: Done
+        run: echo "Bot completed at $(date)"
