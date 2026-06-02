@@ -126,6 +126,15 @@ TD_PAGES = [
     ('https://www.tenderdetail.com/tenders/haryana-tenders/2',         'Haryana',         'building', 5, 300),
     ('https://www.tenderdetail.com/tenders/rajasthan-tenders/1',       'Rajasthan',       'building', 5, 300),
     ('https://www.tenderdetail.com/tenders/rajasthan-tenders/2',       'Rajasthan',       'building', 5, 300),
+    # New confirmed pages — large tenders found
+    ('https://www.tenderdetail.com/tenders/hospital-tenders/2',         '', 'hospital',      5, 300),
+    ('https://www.tenderdetail.com/tenders/airport-tenders/1',          '', 'infrastructure', 10, 300),
+    ('https://www.tenderdetail.com/tenders/defence-tenders/2',          '', 'building',      10, 300),
+    ('https://www.tenderdetail.com/tenders/infrastructure-tenders/3',   '', 'infrastructure', 10, 300),
+    ('https://www.tenderdetail.com/tenders/epc-tenders/4',              '', 'infrastructure', 10, 500),
+    ('https://www.tenderdetail.com/tenders/school-tenders/1',           '', 'building',      5,  300),
+    ('https://www.tenderdetail.com/tenders/civil-construction-tenders/2', '', 'building',    5,  300),
+    ('https://www.tenderdetail.com/tenders/building-construction-tenders/4', '', 'building', 5,  300),
 ]
 
 # ── HELPERS ───────────────────────────────────────────────────────
