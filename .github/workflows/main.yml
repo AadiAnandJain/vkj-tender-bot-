@@ -22,6 +22,8 @@ jobs:
           python-version: "3.11"
 
       - name: Run VKJ Tender Bot
+        env:
+          SCRAPE_DO_TOKEN: ${{ secrets.SCRAPE_DO_TOKEN }}
         run: python scraper.py
 
       - name: Done
