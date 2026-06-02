@@ -197,7 +197,8 @@ def now_iso():
     return datetime.now(timezone.utc).isoformat()
 
 # ── SCRAPERS ──────────────────────────────────────────────────────
-SCRAPE_DO_TOKEN = "e9b584c9850043759c69097865fff7747d5424238b5"
+import os
+SCRAPE_DO_TOKEN = os.environ.get('SCRAPE_DO_TOKEN', '')
 
 def scrape_url(target_url, render=False):
     """Fetch URL via Scrape.do proxy to bypass rate limits"""
