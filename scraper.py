@@ -8,7 +8,7 @@ Work Types: New building, Hospital, Hostel, Railway, EPC, Renovation
 Value: 10-300 Cr (building), 10-500 Cr (railway/DFCCIL)
 """
 
-import urllib.request, ssl, re, json, time, hashlib
+import urllib.request, json, ssl, re, json, time, hashlib
 from datetime import datetime, timezone
 
 FB_KEY     = "AIzaSyAeAbG_9oNwWNmAzGQR7VgwFiDGNj5-ztg"
@@ -197,17 +197,22 @@ def now_iso():
     return datetime.now(timezone.utc).isoformat()
 
 # ── SCRAPERS ──────────────────────────────────────────────────────
+SCRAPE_DO_TOKEN = "e9b584c9850043759c69097865fff7747d5424238b5"
+
+def scrape_url(target_url, render=False):
+    """Fetch URL via Scrape.do proxy to bypass rate limits"""
+    import urllib.parse as urlparse
+    encoded = urlparse.quote(target_url, safe='')
+    proxy_url = f"https://api.scrape.do?token={SCRAPE_DO_TOKEN}&url={encoded}"
+    if render:
+        proxy_url += "&render=true"
+    req = urllib.request.Request(proxy_url, headers={'User-Agent': 'Mozilla/5.0'})
+    resp = urllib.request.urlopen(req, timeout=25, context=ctx)
+    return resp.read().decode('utf-8', errors='ignore')
+
 def scrape_tenderdetail(url, state, cat, min_cr, max_cr):
     tenders = []
-    req = urllib.request.Request(url, headers={
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml',
-        'Accept-Language': 'en-IN,en-GB;q=0.9',
-        'Referer': 'https://www.tenderdetail.com/',
-        'Cache-Control': 'no-cache',
-    })
-    resp = urllib.request.urlopen(req, timeout=20, context=ctx)
-    html = resp.read().decode('utf-8', errors='ignore')
+    html = scrape_url(url)
 
     rows = re.findall(
         r'<div class="tender_row">([\s\S]*?)(?=<div class="tender_row">|<div[^>]*pagination|$)',
@@ -291,6 +296,89 @@ def scrape_dfccil():
     return tenders
 
 # ── MAIN ──────────────────────────────────────────────────────────
+# ── BIDASSIST VIA SCRAPE.DO ───────────────────────────────────
+BIDASSIST_STATES = [
+    ('Uttarakhand',     'Uttarakhand'),
+    ('Uttar+Pradesh',   'Uttar Pradesh'),
+    ('Himachal+Pradesh','Himachal Pradesh'),
+    ('Punjab',          'Punjab'),
+    ('Chandigarh',      'Chandigarh'),
+    ('Haryana',         'Haryana'),
+    ('Rajasthan',       'Rajasthan'),
+    ('Delhi',           'Delhi'),
+]
+
+def scrape_bidassist(state_param, state_name):
+    """Scrape BidAssist via Scrape.do JS rendering — gets real CPPP tender data"""
+    tenders = []
+    try:
+        url = f"https://bidassist.com/global-tenders/active?category=Works&state={state_param}"
+        html = scrape_url(url, render=True)
+
+        # Find content array in rendered JSON
+        content_m = re.search(r'"content":\[', html)
+        if not content_m:
+            return tenders
+        arr_start = html.find('[', content_m.start())
+        depth = 0; i = arr_start; arr_end = len(html)
+        while i < len(html):
+            if html[i] == '[': depth += 1
+            elif html[i] == ']':
+                depth -= 1
+                if depth == 0: arr_end = i+1; break
+            i += 1
+
+        tender_list = json.loads(html[arr_start:arr_end])
+
+        for t in tender_list:
+            title = (t.get('tenderDescription') or '').strip()
+            if not title or len(title) < 15: continue
+
+            text = title.lower()
+            if any(b in text for b in BAD_KW): continue
+            is_bld = any(k in text for k in BUILDING_KW)
+            is_rly = any(k in text for k in RAILWAY_KW)
+            if not is_bld and not is_rly: continue
+
+            # Value in paise/rupees → convert to crore
+            raw_val = float(t.get('value', 0) or 0)
+            val_cr = None
+            if raw_val > 10000000:   val_cr = round(raw_val / 10000000, 2)
+            elif raw_val > 100000:   val_cr = round(raw_val / 100000, 2)
+            elif raw_val > 0:        val_cr = round(raw_val, 2)
+
+            if val_cr is not None and (val_cr < 5 or val_cr > 500):
+                continue
+
+            # Deadline from Unix timestamp ms
+            dl_ts = t.get('bidDeadLine') or t.get('closingDate')
+            deadline = ''
+            if dl_ts:
+                try:
+                    deadline = datetime.fromtimestamp(int(dl_ts)/1000).strftime('%Y-%m-%d')
+                except: pass
+            if not is_active(deadline): continue
+
+            org = (t.get('purchaserName') or t.get('displayPurchaserName') or '').strip()[:100]
+            link = f"https://bidassist.com/tenders/{t.get('tenderId','')}"
+            tid = make_id(title)
+
+            tenders.append({
+                'id': tid,
+                'name': title[:200],
+                'client': org,
+                'state': state_name,
+                'value': str(val_cr) if val_cr else '',
+                'deadline': deadline,
+                'category': classify(title, 'building'),
+                'source': 'BidAssist',
+                'link': link,
+            })
+
+    except Exception as e:
+        print(f"  BidAssist {state_name}: {e}")
+    return tenders
+
 def main():
     print(f"VKJ Bot v2 starting at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
@@ -310,6 +398,17 @@ def main():
         except Exception as e:
             print(f"  {label}: ERROR — {e}")
         time.sleep(0.4)
+
+    # Scrape BidAssist via Scrape.do (gets CPPP/govt data through JS rendering)
+    print("  Scraping BidAssist (priority states)...")
+    for state_param, state_name in BIDASSIST_STATES:
+        try:
+            ba_tenders = scrape_bidassist(state_param, state_name)
+            print(f"    {state_name}: {len(ba_tenders)} relevant")
+            all_tenders.extend(ba_tenders)
+        except Exception as e:
+            print(f"    BidAssist {state_name}: ERROR — {e}")
+        time.sleep(1.0)  # Respect Scrape.do rate limits
 
     # Scrape DFCCIL
     try:
