@@ -246,7 +246,7 @@ def scrape_tenderdetail(url, state, cat, min_cr, max_cr):
             text = title.lower()
             if any(b in text for b in BAD_KW): continue
             if not any(k in text for k in BUILD_KW+RAILWAY_KW): continue
-            vm = re.search(r'class="tender-value"[\s\S]*?([0-9,]+\.?[0-9]*\s*(?:Crore|Lakhs|Lakh))', block, re.I)
+            vm = re.search(r'class="tender-value">\s*(?:<img[^>]*>)?\s*([0-9,]+\.?[0-9]*\s*(?:Crore|Lakhs|Lakh))', block, re.I)
             val_str = vm.group(1).strip() if vm else ''
             val_cr = extract_cr(val_str)
             if val_cr is not None and (val_cr < min_cr or val_cr > max_cr): continue
@@ -484,6 +484,95 @@ def fetch_tender_details(link):
         pass
     return out
 
+# ── RELEVANCE SCORING ENGINE ─────────────────────────────────────
+STRONG_KW = ['construction of hospital','construction of hostel','construction of medical college',
+    'construction of institute','construction of college','construction of school building',
+    'epc contract','epc mode','engineering procurement and construction',
+    'construction of office building','construction of administrative',
+    'construction of academic','construction of residential complex',
+    'construction of staff quarters','railway station redevelopment',
+    'construction of auditorium','construction of laboratory']
+
+def relevance_score(t):
+    """Score 0-100 how well a tender fits VKJ's profile"""
+    score = 50
+    text = (t.get('name','') + ' ' + t.get('brief','')).lower()
+    client = (t.get('client','')).lower()
+    # Strong work-type signals
+    for kw in STRONG_KW:
+        if kw in text: score += 12; break
+    # Preferred clients
+    if any(c in client for c in ['nbcc','cpwd','aiims','military engineer','mes ']): score += 15
+    elif any(c in client for c in ['pwd','railway','smart city','medical']): score += 8
+    # Priority state
+    if t.get('priorityState'): score += 15
+    # Value sweet spot ₹10-150 Cr
+    try:
+        v = float(t.get('value') or 0)
+        if 10 <= v <= 150: score += 12
+        elif 5 <= v < 10 or 150 < v <= 300: score += 6
+        elif v > 300: score -= 5
+    except: pass
+    # Deadline comfort (>=10 days to prepare)
+    try:
+        from datetime import datetime as _dt
+        days = (_dt.strptime(t.get('deadline',''), '%Y-%m-%d').date() - _dt.now().date()).days
+        if days >= 14: score += 6
+        elif days < 5: score -= 10
+    except: pass
+    # Negative: repair/maintenance-heavy
+    if any(b in text for b in ['petty repair','day to day','annual repair','maintenance work']): score -= 20
+    return max(0, min(100, score))
+
+def fb_get_docs(col, page_size=300):
+    url = f"{FB}/{col}?key={FB_KEY}&pageSize={page_size}"
+    req = urllib.request.Request(url, headers={'Accept':'application/json'})
+    resp = urllib.request.urlopen(req, timeout=15, context=ctx)
+    data = json.loads(resp.read())
+    out = []
+    for d in data.get('documents', []):
+        f = d.get('fields', {})
+        obj = {'_id': d['name'].split('/')[-1]}
+        for k, v in f.items():
+            obj[k] = v.get('stringValue') or v.get('booleanValue') or v.get('integerValue') or ''
+        out.append(obj)
+    return out
+
+def backfill_existing():
+    """Enrich up to 25 existing bot tenders that lack value/EMD per run"""
+    print("\nBackfilling existing tenders missing values...")
+    docs = fb_get_docs(BOT_COL)
+    need = [d for d in docs if not d.get('value') and d.get('link') and 'tenderdetail.com' in d.get('link','')][:25]
+    print(f"  {len(need)} tenders need enrichment (of {len(docs)} total)")
+    fixed = 0
+    for d in need:
+        det = fetch_tender_details(d['link'])
+        updates = {}
+        if det.get('valueFromDetail'):
+            try:
+                v = float(det['valueFromDetail'])
+                if v >= 1:  # keep even 1Cr+ on backfill
+                    updates['value'] = {'stringValue': det['valueFromDetail']}
+            except: pass
+        if det.get('emd'): updates['emd'] = {'stringValue': det['emd']}
+        if det.get('brief'): updates['brief'] = {'stringValue': det['brief']}
+        if det.get('deadlineFromDetail') and not d.get('deadline'):
+            updates['deadline'] = {'stringValue': det['deadlineFromDetail']}
+        if updates:
+            # PATCH with updateMask so we only touch these fields
+            mask = '&'.join('updateMask.fieldPaths='+k for k in updates)
+            url = f"{FB}/{BOT_COL}/{d['_id']}?key={FB_KEY}&{mask}"
+            payload = json.dumps({'fields': updates}).encode()
+            try:
+                req = urllib.request.Request(url, data=payload, method='PATCH',
+                    headers={'Content-Type':'application/json'})
+                urllib.request.urlopen(req, timeout=10, context=ctx)
+                fixed += 1
+            except Exception as e:
+                print(f"  patch fail: {e}")
+        time.sleep(0.4)
+    print(f"  ✓ Enriched {fixed} existing tenders")
+
 def main():
     print(f"VKJ Bot starting — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
@@ -566,6 +655,12 @@ def main():
         except Exception as e:
             print(f"  ✗ {t['name'][:40]}: {e}")
         time.sleep(0.08)
+
+    # Backfill existing tenders missing values
+    try:
+        backfill_existing()
+    except Exception as e:
+        print(f"Backfill error: {e}")
 
     print(f"\n{'='*55}")
     print(f"Done: {written} new tenders written")
