@@ -407,6 +407,7 @@ Client: {client}
 State: {state}
 Value: {val_str}
 Category: {cat}
+Details: {tender.get('brief','')[:400]}
 
 Return this exact JSON:
 {{
@@ -440,6 +441,48 @@ Return this exact JSON:
     except Exception as e:
         print(f"    AI summary error: {e}")
         return None
+
+# ── DETAIL PAGE ENRICHMENT ───────────────────────────────────────
+def fetch_tender_details(link):
+    """Fetch TenderDetail detail page → extract EMD, doc fees, brief, dates"""
+    out = {}
+    try:
+        html = fetch(link)
+        # Tender Brief
+        bm = re.search(r'Tender Brief\s*:?\s*</label>[\s\S]{0,80}?<label[^>]*>([\s\S]{30,900}?)</label>', html)
+        if not bm:
+            bm = re.search(r'Tender Brief[\s\S]{0,300}?>([^<]{50,800})<', html)
+        if bm:
+            brief = re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', ' ', bm.group(1))).strip()
+            out['brief'] = brief[:600]
+        # EMD
+        em = re.search(r'EMD[\s\S]{0,120}?₹\s*([0-9,.]+)', html)
+        if em:
+            try:
+                emd_val = float(em.group(1).replace(',',''))
+                out['emd'] = f"{emd_val/100000:.2f}" if emd_val > 1000 else str(emd_val)  # in Lakhs
+            except: pass
+        # Document fees
+        dm = re.search(r'Document Fees[\s\S]{0,120}?₹\s*([0-9,.]+)', html)
+        if dm:
+            out['docFee'] = dm.group(1).replace(',','')
+        # Tender Value (sometimes only on detail page)
+        vm = re.search(r'Tender Value[\s\S]{0,120}?₹\s*([0-9,.]+)\s*(Crore|Lakh)', html, re.I)
+        if vm:
+            v = float(vm.group(1).replace(',',''))
+            if 'lakh' in vm.group(2).lower(): v = v/100
+            out['valueFromDetail'] = f"{v:.2f}"
+        # Submission date
+        sm = re.search(r'Submission [Dd]ate[\s\S]{0,100}?(\d{2})-(\d{2})-(\d{4})', html)
+        if sm:
+            out['deadlineFromDetail'] = f"{sm.group(3)}-{sm.group(2)}-{sm.group(1)}"
+        # Location/pincode
+        lm = re.search(r'(?:Location|City)[\s\S]{0,100}?<label[^>]*>([^<]{3,60})</label>', html)
+        if lm:
+            out['location'] = lm.group(1).strip()
+    except Exception as e:
+        pass
+    return out
 
 def main():
     print(f"VKJ Bot starting — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
