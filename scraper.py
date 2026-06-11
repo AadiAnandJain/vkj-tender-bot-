@@ -573,6 +573,36 @@ def backfill_existing():
         time.sleep(0.4)
     print(f"  ✓ Enriched {fixed} existing tenders")
 
+# ── SCRAPER: TENDERSONTIME ───────────────────────────────────────
+TOT_PAGES = [
+    'https://www.tendersontime.com/india-tenders/building-construction-tenders/',
+    'https://www.tendersontime.com/india-tenders/civil-work-tenders/',
+    'https://www.tendersontime.com/india-tenders/hospital-building-tenders/',
+]
+
+def scrape_tendersontime():
+    tenders = []
+    for url in TOT_PAGES:
+        try:
+            html = fetch(url)
+            items = re.findall(r'<a href="(https://www\.tendersontime\.com/india/details/[^"]+)"[^>]*><p class="listing-summary">([^<]{20,250})</p>', html)
+            for link, title in items:
+                title = title.strip()
+                text = title.lower()
+                if any(b in text for b in BAD_KW): continue
+                if not any(k in text for k in BUILD_KW + RAILWAY_KW): continue
+                tenders.append({
+                    'id': make_id(title), 'name': title[:200],
+                    'client': '', 'state': infer_state(title),
+                    'value': '', 'deadline': '',
+                    'category': classify(title, 'building'),
+                    'source': 'TendersOnTime', 'link': link,
+                })
+            time.sleep(0.4)
+        except Exception as e:
+            print(f"    TOT error: {e}")
+    return tenders
+
 def main():
     print(f"VKJ Bot starting — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
